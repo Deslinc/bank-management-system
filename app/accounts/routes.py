@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from bson.objectid import ObjectId
 from app.core.database import accounts_collection
 from app.accounts.logic import create_account
 from pydantic import BaseModel
@@ -31,10 +32,50 @@ def create_new_account(data: AccountCreate):
 
 @router.post("/deposit")
 def deposit_funds(tx: Transaction):
-    acc = accounts_collection.find_one({"_id": tx.account_id})
+    acc = accounts_collection.find_one({"_id": ObjectId(tx.account_id)})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     new_balance = acc["balance"] + tx.amount
-    acc["transactions"].append(f"Deposited ${tx.amount}")
-    accounts_collection.update_one({"_id": tx.account_id}, {"$set": {"balance": new_balance, "transactions": acc["transactions"]}})
+    acc["transactions"].append(f"[{tx.amount}] Deposited")
+    accounts_collection.update_one(
+        {"_id": ObjectId(tx.account_id)},
+        {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
+    )
     return {"message": "Deposit successful"}
+
+@router.post("/withdraw")
+def withdraw_funds(tx: Transaction):
+    acc = accounts_collection.find_one({"_id": ObjectId(tx.account_id)})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    new_balance = acc["balance"] - tx.amount
+    account_type = acc.get("type")
+    
+    # Apply rules based on account type
+    if account_type == "savings" and new_balance < 100:
+        raise HTTPException(status_code=400, detail="Cannot go below $100 for savings account")
+    elif account_type == "current" and new_balance < -500:
+        raise HTTPException(status_code=400, detail="Overdraft limit exceeded for current account")
+    elif account_type == "fixed":
+        raise HTTPException(status_code=400, detail="Withdrawals not allowed for fixed deposit account")
+
+    acc["transactions"].append(f"[{tx.amount}] Withdrawn")
+    accounts_collection.update_one(
+        {"_id": ObjectId(tx.account_id)},
+        {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
+    )
+    return {"message": "Withdrawal successful"}
+
+@router.get("/balance/{account_id}")
+def get_balance(account_id: str):
+    acc = accounts_collection.find_one({"_id": ObjectId(account_id)})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"balance": acc["balance"]}
+
+@router.get("/transactions/{account_id}")
+def get_transaction_history(account_id: str):
+    acc = accounts_collection.find_one({"_id": ObjectId(account_id)})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"transactions": acc.get("transactions", [])}

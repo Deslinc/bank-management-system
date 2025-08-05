@@ -7,7 +7,8 @@ from app.accounts.routes import router as account_router
 app = FastAPI(
     title="Bank Account Management System",
     description="A simplified digital banking system built with FastAPI and MongoDB",
-    version="1.0.0"
+    version="1.0.0",
+    debug=True
 )
 
 # Allow frontend clients (adjust the origins in production)

@@ -6,7 +6,8 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=6, example="strong_password")
 
 
-class UserInDB(UserCreate):
+class UserInDB(BaseModel):
+    username: str
     hashed_password: str
 
 

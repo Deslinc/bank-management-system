@@ -1,18 +1,19 @@
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.security import OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from pymongo.collection import Collection
-from bson.objectid import ObjectId
-
 from app.auth.utils import create_access_token
 from app.auth.schemas import UserCreate, UserInDB
 from app.core.database import users_collection
+from pydantic import BaseModel
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(tags=["Authentication"])
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 # -----------------------------
 # Helper Functions
@@ -29,6 +30,7 @@ def get_user_by_username(username: str, collection: Collection):
     user_data = collection.find_one({"username": username})
     if user_data:
         return UserInDB(**user_data)
+    return None
 
 
 # -----------------------------
@@ -41,8 +43,9 @@ def signup(user: UserCreate):
         raise HTTPException(status_code=400, detail="Username already taken")
 
     hashed_pwd = hash_password(user.password)
-    user_dict = user.dict()
-    user_dict["password"] = hashed_pwd
+    user_dict = user.model_dump()
+    user_dict["hashed_password"] = hashed_pwd
+    del user_dict["password"]  # Remove plaintext password
 
     result = users_collection.insert_one(user_dict)
     if not result.inserted_id:
@@ -56,12 +59,12 @@ def signup(user: UserCreate):
 # Login and Get JWT
 # -----------------------------
 @router.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = get_user_by_username(form_data.username, users_collection)
+def login(credentials: LoginRequest):
+    user = get_user_by_username(credentials.username, users_collection)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    if not verify_password(form_data.password, user.password):
+    if not verify_password(credentials.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(data={"sub": user.username})
