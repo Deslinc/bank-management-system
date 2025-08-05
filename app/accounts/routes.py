@@ -3,6 +3,7 @@ from bson.objectid import ObjectId
 from app.core.database import accounts_collection
 from app.accounts.logic import create_account
 from pydantic import BaseModel
+from datetime import datetime
 
 router = APIRouter()
 
@@ -36,7 +37,8 @@ def deposit_funds(tx: Transaction):
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     new_balance = acc["balance"] + tx.amount
-    acc["transactions"].append(f"[{tx.amount}] Deposited")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    acc["transactions"].append(f"[{timestamp}] Deposited ${tx.amount}")
     accounts_collection.update_one(
         {"_id": ObjectId(tx.account_id)},
         {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
@@ -58,8 +60,10 @@ def withdraw_funds(tx: Transaction):
         raise HTTPException(status_code=400, detail="Overdraft limit exceeded for current account")
     elif account_type == "fixed":
         raise HTTPException(status_code=400, detail="Withdrawals not allowed for fixed deposit account")
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    acc["transactions"].append(f"[{tx.amount}] Withdrawn")
+    acc["transactions"].append(f"[{timestamp}] Withdrawn ${tx.amount}")
     accounts_collection.update_one(
         {"_id": ObjectId(tx.account_id)},
         {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
