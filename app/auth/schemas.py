@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class UserCreate(BaseModel):
-    username: str = Field(..., example="john_doe")
+    username: str = Field(..., example="deslinc")
     password: str = Field(..., min_length=6, example="strong_password")
 
 
@@ -12,7 +12,7 @@ class UserInDB(BaseModel):
 
 
 class UserLogin(BaseModel):
-    username: str = Field(..., example="john_doe")
+    username: str = Field(..., example="deslinc")
     password: str = Field(..., min_length=6, example="strong_password")
 
 
