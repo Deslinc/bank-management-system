@@ -4,8 +4,8 @@ from datetime import datetime
 
 
 class AccountCreate(BaseModel):
-    customer_name: str = Field(..., example="Alice Smith")
-    account_type: Literal["savings", "current", "fixed"] = Field(..., example="savings")
+    customer_name: str = Field(..., example="your alias")
+    account_type: Literal["SAVINGS", "CURRENT", "FIXED DEPOSIT"] = Field(..., example="SAVINGS")
     initial_deposit: float = Field(..., ge=0, example=500.0)
 
 

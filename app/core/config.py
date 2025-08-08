@@ -3,31 +3,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGODB_URI")
+MONGO_URI = os.getenv("MONGO_URI")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
-# ==================== app/core/database.py ====================
-from pymongo import MongoClient
-from app.core.config import MONGO_URI
-
-client = MongoClient(MONGO_URI)
-db = client["mybankdb"]
-users_collection = db["users"]
-accounts_collection = db["accounts"]
-
-# ==================== app/auth/schemas.py ====================
-from pydantic import BaseModel, EmailStr
-
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+# Fail fast if critical env vars are missing
+if not MONGO_URI:
+    raise ValueError("❌ MONGO_URI is not set in environment variables")
+if not JWT_SECRET_KEY:
+    raise ValueError("❌ JWT_SECRET_KEY is not set in environment variables")

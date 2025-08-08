@@ -1,43 +1,44 @@
 # app/auth/logic.py
 
 from app.auth.schemas import UserCreate, UserInDB
-
-# In-memory fake users database (temporary until MongoDB is connected)
-fake_users_db = {}
-
-def fake_hash_password(password: str):
-    return "hashed_" + password
+from app.core.database import db
+from app.auth.utils import get_password_hash, verify_password
 
 async def create_user(user: UserCreate):
-    if user.username in fake_users_db:
-        raise ValueError("User already exists")
+    # Check if email is already registered
+    existing_user = await db["users"].find_one({"email": user.email})
+    if existing_user:
+        raise ValueError("A user with this email already exists")
 
-    hashed_password = fake_hash_password(user.password)
-    user_in_db = UserInDB(
-        username=user.username,
-        password=user.password,
-        hashed_password=hashed_password
-    )
+    hashed_password = get_password_hash(user.password)
 
-    # Simulate storing user (avoid storing plaintext password in real apps)
-    fake_users_db[user.username] = {
-        "username": user.username,
+    user_data = {
+        "username": user.username,  # can be non-unique
+        "email": user.email,        # must be unique
         "hashed_password": hashed_password
     }
 
-    return user_in_db
+    result = await db["users"].insert_one(user_data)
 
-async def authenticate_user(username: str, password: str):
-    user = fake_users_db.get(username)
+    return UserInDB(
+        username=user.username,
+        email=user.email,
+        hashed_password=hashed_password,
+        password=user.password  # not stored in DB, just for schema return
+    )
+
+async def authenticate_user(email: str, password: str):
+    # Find user by email
+    user = await db["users"].find_one({"email": email})
     if not user:
         return None
 
-    hashed_password = fake_hash_password(password)
-    if hashed_password != user["hashed_password"]:
+    if not verify_password(password, user["hashed_password"]):
         return None
 
     return UserInDB(
-        username=username,
-        password=password,
-        hashed_password=hashed_password
+        username=user["username"],
+        email=user["email"],
+        hashed_password=user["hashed_password"],
+        password=password  # for schema
     )

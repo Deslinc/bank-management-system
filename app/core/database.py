@@ -1,21 +1,12 @@
 from pymongo import MongoClient
-from dotenv import load_dotenv
-import os
+from app.core.config import MONGO_URI
 
-load_dotenv()  # Load environment variables from .env
-
-# Load MongoDB URI from environment
-MONGO_URI = os.getenv("MONGO_URI")
-
-if not MONGO_URI:
-    raise ValueError("MongoDB URI is missing. Check your .env file.")
-
-# Create a MongoClient instance
 client = MongoClient(MONGO_URI)
+db = client["mybankdb"]
 
-# Define the database name
-db = client["bank_app"]
-
-# Collections that will be used
 users_collection = db["users"]
 accounts_collection = db["accounts"]
+
+# Optional: Ensure indexes for performance & uniqueness
+users_collection.create_index("email", unique=True)
+users_collection.create_index("username", unique=True)

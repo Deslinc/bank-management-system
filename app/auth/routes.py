@@ -1,71 +1,59 @@
-from fastapi import APIRouter, HTTPException, Depends
-from passlib.context import CryptContext
-from pymongo.collection import Collection
-from app.auth.utils import create_access_token
-from app.auth.schemas import UserCreate, UserInDB
-from app.core.database import users_collection
-from pydantic import BaseModel
+# app/auth/routes.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from bson import ObjectId
 
-router = APIRouter(tags=["Authentication"])
+from app.auth.schemas import LoginRequest, TokenResponse, UserCreate, UserResponse
+from app.auth.utils import hash_password, verify_password, create_access_token, get_current_token_data
+from app.core.database import users_collection  # direct collection import
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-# -----------------------------
-# Helper Functions
-# -----------------------------
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_user_by_username(username: str, collection: Collection):
-    user_data = collection.find_one({"username": username})
-    if user_data:
-        return UserInDB(**user_data)
-    return None
-
-
-# -----------------------------
-# Register New User
-# -----------------------------
-@router.post("/signup")
-def signup(user: UserCreate):
-    existing_user = users_collection.find_one({"username": user.username})
+@router.post("/register", response_model=UserResponse)
+def register(user: UserCreate):
+    existing_user = users_collection.find_one({"email": user.email})
     if existing_user:
-        raise HTTPException(status_code=400, detail="Username already taken")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Email already registered"
+        )
 
-    hashed_pwd = hash_password(user.password)
-    user_dict = user.model_dump()
-    user_dict["hashed_password"] = hashed_pwd
-    del user_dict["password"]  # Remove plaintext password
-
+    hashed_pw = hash_password(user.password)
+    user_dict = {
+        "username": user.username,
+        "email": user.email,
+        "password": hashed_pw
+    }
     result = users_collection.insert_one(user_dict)
-    if not result.inserted_id:
-        raise HTTPException(status_code=500, detail="Failed to create user")
 
-    return {"message": "User registered successfully"}
+    return UserResponse(
+        id=str(result.inserted_id),
+        username=user.username,
+        email=user.email
+    )
 
+@router.post("/login", response_model=TokenResponse)
+def login(login_data: LoginRequest):
+    user = users_collection.find_one({"email": login_data.email})
+    if not user or not verify_password(login_data.password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid credentials"
+        )
 
+    token = create_access_token({"sub": user["username"], "email": user["email"]})
+    return TokenResponse(access_token=token)
 
-# -----------------------------
-# Login and Get JWT
-# -----------------------------
-@router.post("/login")
-def login(credentials: LoginRequest):
-    user = get_user_by_username(credentials.username, users_collection)
+@router.get("/me", response_model=UserResponse)
+def get_me(token_data = Depends(get_current_token_data)):
+    user = users_collection.find_one({"email": token_data.email})
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
 
-    if not verify_password(credentials.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    token = create_access_token(data={"sub": user.username})
-    return {"access_token": token, "token_type": "bearer"}
+    return UserResponse(
+        id=str(user["_id"]),
+        username=user["username"],
+        email=user["email"]
+    )
