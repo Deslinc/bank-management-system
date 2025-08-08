@@ -40,7 +40,7 @@ def login(login_data: LoginRequest):
             detail="Invalid credentials"
         )
 
-    token = create_access_token({"sub": user["username"], "email": user["email"]})
+    token = create_access_token(data={"sub": str(user["_id"]), "email": user["email"]})
     return TokenResponse(access_token=token)
 
 @router.get("/me", response_model=UserResponse)

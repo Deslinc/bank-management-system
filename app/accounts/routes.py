@@ -1,126 +1,136 @@
-from fastapi import APIRouter, HTTPException, Depends
-from bson.objectid import ObjectId
+from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime
-from pydantic import BaseModel
+from bson import ObjectId
+
 from app.core.database import accounts_collection
-from app.accounts.logic import create_account
-from app.auth.utils import get_current_token_data
-from app.auth.schemas import TokenData
+from app.accounts.models import SavingsAccount, CurrentAccount, FixedDepositAccount
+from app.auth.utils import get_current_user
 
-router = APIRouter(tags=["Accounts"])
+router = APIRouter(prefix="/accounts", tags=["Accounts"])
 
-class AccountCreateReq(BaseModel):
-    initial_balance: float
-    account_type: str  # "SAVINGS", "CURRENT", "FIXED DEPOSIT"
 
-class TransactionReq(BaseModel):
-    account_id: str
-    amount: float
-
+# Create Account
 @router.post("/create")
-def create_new_account(
-    data: AccountCreateReq,
-    token_data: TokenData = Depends(get_current_token_data)
-):
-    owner_email = token_data.email
-    owner_username = token_data.username
-    account_type = data.account_type.lower()
+def create_account(account_type: str, initial_deposit: float, current_user: dict = Depends(get_current_user)):
+    # Check if user already has this account type
+    existing = accounts_collection.find_one({"owner_id": current_user["_id"], "account_type": account_type})
+    if existing:
+        raise HTTPException(status_code=400, detail=f"You already have a {account_type} account")
 
-    # ✅ Check if user already has this account type
-    existing_account = accounts_collection.find_one({
-        "owner_email": owner_email,
-        "type": account_type
-    })
-    if existing_account:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You already have a {data.account_type} account."
-        )
+    # Create account based on type and rules
+    if account_type.upper() == "SAVINGS":
+        try:
+            account = SavingsAccount(owner=current_user["_id"], balance=initial_deposit)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    # Create account object using your OOP logic
-    acc_obj = create_account(data.account_type, owner_username, data.initial_balance)
+    elif account_type.lower() == "current":
+        account = CurrentAccount(owner=current_user["_id"], balance=initial_deposit)
+
+    elif account_type.lower() == "fixed":
+        try:
+            account = FixedDepositAccount(owner=current_user["_id"], balance=initial_deposit, duration_months=6)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid account type")
 
     # Save to DB
-    acc_doc = {
-        "owner_email": owner_email,
-        "owner_username": owner_username,
-        "balance": acc_obj.get_balance(),
-        "type": account_type,  
-        "transactions": acc_obj.get_transaction_history(),
+    account_doc = {
+        "owner_id": current_user["_id"],
+        "account_type": account_type.lower(),
+        "balance": account.balance,
+        "transactions": account.transactions,
+        "maturity_date": getattr(account, "maturity_date", None),
         "created_at": datetime.now()
     }
-    result = accounts_collection.insert_one(acc_doc)
-    return {"account_id": str(result.inserted_id)}
+    result = accounts_collection.insert_one(account_doc)
 
-@router.post("/deposit")
-def deposit_funds(
-    tx: TransactionReq,
-    token_data: TokenData = Depends(get_current_token_data)
-):
-    acc = accounts_collection.find_one({"_id": ObjectId(tx.account_id)})
-    if not acc:
+    return {
+        "message": f"{account_type.capitalize()} account created successfully",
+        "account_id": str(result.inserted_id)  # Return the MongoDB assigned account ID
+    }
+
+
+# Deposit
+@router.post("/{account_id}/deposit")
+def deposit(account_id: str, amount: float, current_user: dict = Depends(get_current_user)):
+    account = accounts_collection.find_one({"_id": ObjectId(account_id), "owner_id": current_user["_id"]})
+    if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if acc.get("owner_email") != token_data.email:
-        raise HTTPException(status_code=403, detail="Forbidden: not your account")
 
-    new_balance = acc["balance"] + tx.amount
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    acc.setdefault("transactions", []).append(f"[{timestamp}] Deposited ${tx.amount}")
+    # Restrict deposits for fixed deposit accounts
+    if account["account_type"] == "fixed":
+        raise HTTPException(status_code=400, detail="Cannot deposit into fixed deposit account after creation")
+
+    # Update using model logic
+    if account["account_type"] == "savings":
+        acc_obj = SavingsAccount(owner=account["owner_id"], balance=account["balance"])
+    elif account["account_type"] == "current":
+        acc_obj = CurrentAccount(owner=account["owner_id"], balance=account["balance"])
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported account type for deposit")
+
+    try:
+        acc_obj.deposit(amount)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Save updated balance and transactions
     accounts_collection.update_one(
-        {"_id": ObjectId(tx.account_id)},
-        {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
+        {"_id": ObjectId(account_id)},
+        {"$set": {"balance": acc_obj.balance, "transactions": acc_obj.transactions}}
     )
-    return {"message": "Deposit successful", "balance": new_balance}
+    return {"message": "Deposit successful"}
 
-@router.post("/withdraw")
-def withdraw_funds(
-    tx: TransactionReq,
-    token_data: TokenData = Depends(get_current_token_data)
-):
-    acc = accounts_collection.find_one({"_id": ObjectId(tx.account_id)})
-    if not acc:
+
+# Withdraw
+@router.post("/{account_id}/withdraw")
+def withdraw(account_id: str, amount: float, current_user: dict = Depends(get_current_user)):
+    account = accounts_collection.find_one({"_id": ObjectId(account_id), "owner_id": current_user["_id"]})
+    if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if acc.get("owner_email") != token_data.email:
-        raise HTTPException(status_code=403, detail="Forbidden: not your account")
 
-    new_balance = acc["balance"] - tx.amount
-    account_type = acc.get("type", "").upper()
+    # Create account object based on type
+    if account["account_type"] == "savings":
+        acc_obj = SavingsAccount(owner=account["owner_id"], balance=account["balance"])
+    elif account["account_type"] == "current":
+        acc_obj = CurrentAccount(owner=account["owner_id"], balance=account["balance"])
+    elif account["account_type"] == "fixed":
+        acc_obj = FixedDepositAccount(owner=account["owner_id"], balance=account["balance"])
+        acc_obj.maturity_date = account["maturity_date"]
 
-    if account_type == "SAVINGS" and new_balance < 100:
-        raise HTTPException(status_code=400, detail="Cannot go below $100 for savings account")
-    elif account_type == "CURRENT" and new_balance < -500:
-        raise HTTPException(status_code=400, detail="Overdraft limit exceeded for current account")
-    elif account_type == "FIXED DEPOSIT":
-        raise HTTPException(status_code=400, detail="Withdrawals not allowed for fixed deposit account")
+        # Check maturity date
+        if datetime.now() < acc_obj.maturity_date:
+            raise HTTPException(status_code=400, detail="Cannot withdraw before maturity date")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid account type")
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    acc.setdefault("transactions", []).append(f"[{timestamp}] Withdrawn ${tx.amount}")
+    try:
+        acc_obj.withdraw(amount)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Save updated balance and transactions
     accounts_collection.update_one(
-        {"_id": ObjectId(tx.account_id)},
-        {"$set": {"balance": new_balance, "transactions": acc["transactions"]}}
+        {"_id": ObjectId(account_id)},
+        {"$set": {"balance": acc_obj.balance, "transactions": acc_obj.transactions}}
     )
-    return {"message": "Withdrawal successful", "balance": new_balance}
+    return {"message": "Withdrawal successful"}
 
-@router.get("/balance/{account_id}")
-def get_balance(
-    account_id: str,
-    token_data: TokenData = Depends(get_current_token_data)
-):
-    acc = accounts_collection.find_one({"_id": ObjectId(account_id)})
-    if not acc:
+# Get Account Balance
+@router.get("/{account_id}/balance")
+def get_balance(account_id: str, current_user: dict = Depends(get_current_user)):
+    account = accounts_collection.find_one({"_id": ObjectId(account_id), "owner_id": current_user["_id"]})
+    if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if acc.get("owner_email") != token_data.email:
-        raise HTTPException(status_code=403, detail="Forbidden: not your account")
-    return {"balance": acc["balance"]}
+    return {"balance": account["balance"]}
 
-@router.get("/transactions/{account_id}")
-def get_transaction_history(
-    account_id: str,
-    token_data: TokenData = Depends(get_current_token_data)
-):
-    acc = accounts_collection.find_one({"_id": ObjectId(account_id)})
-    if not acc:
+# Get Transaction History
+@router.get("/{account_id}/transactions")
+def get_transactions(account_id: str, current_user: dict = Depends(get_current_user)):
+    account = accounts_collection.find_one({"_id": ObjectId(account_id), "owner_id": current_user["_id"]})
+    if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if acc.get("owner_email") != token_data.email:
-        raise HTTPException(status_code=403, detail="Forbidden: not your account")
-    return {"transactions": acc.get("transactions", [])}
+    return {"transactions": account["transactions"]}

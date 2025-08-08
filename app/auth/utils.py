@@ -6,6 +6,8 @@ from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.config import JWT_SECRET_KEY, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.auth.schemas import TokenData
+from app.core.database import users_collection 
+from bson import ObjectId
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -42,3 +44,40 @@ def get_current_token_data(
         return TokenData(username=username, email=email)
     except JWTError:
         raise credentials_exception
+    
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID format",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
